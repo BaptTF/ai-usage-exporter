@@ -1,0 +1,104 @@
+// Command ai-usage-exporter polls multiple AI subscriptions and exposes their
+// quotas as Prometheus metrics. It has no UI and never accepts Prometheus
+// traffic; scraping is strictly pull-based over /metrics.
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/BaptTF/ai-usage-exporter/internal/collector"
+	"github.com/BaptTF/ai-usage-exporter/internal/config"
+	"github.com/BaptTF/ai-usage-exporter/internal/cursor"
+	"github.com/BaptTF/ai-usage-exporter/internal/devin"
+	"github.com/BaptTF/ai-usage-exporter/internal/metrics"
+	"github.com/BaptTF/ai-usage-exporter/internal/opencode"
+	"github.com/BaptTF/ai-usage-exporter/internal/provider"
+	"github.com/BaptTF/ai-usage-exporter/internal/server"
+)
+
+func main() {
+	logger := log.New(os.Stdout, "ai-usage-exporter: ", log.LstdFlags|log.LUTC)
+
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Fatalf("configuration error: %v", err)
+	}
+
+	providers := buildProviders(cfg)
+	coll, err := collector.New(providers, cfg.Secrets(), logger)
+	if err != nil {
+		logger.Fatalf("collector error: %v", err)
+	}
+
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(metrics.New(coll.Snapshot))
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	pollDone := make(chan struct{})
+	go func() {
+		defer close(pollDone)
+		coll.Run(ctx, cfg.PollInterval)
+	}()
+
+	logProviderSummary(logger, cfg, providers)
+
+	srv := server.New(":"+strconv.Itoa(cfg.Port), registry, logger)
+	if err := srv.Run(ctx); err != nil {
+		logger.Printf("server error: %v", err)
+		stop()
+		<-pollDone
+		os.Exit(1)
+	}
+	<-pollDone
+	logger.Printf("stopped")
+}
+
+func buildProviders(cfg config.Config) []provider.Provider {
+	var out []provider.Provider
+	if cfg.OpenCodeEnabled() {
+		out = append(out, opencode.NewProvider(opencode.NewClient(cfg.RequestTimeout), cfg.OpenCodeKeys))
+	}
+	if cfg.CursorEnabled() {
+		out = append(out, cursor.NewProvider(cursor.NewClient(cfg.Cursor), "default"))
+	}
+	if cfg.DevinEnabled() {
+		out = append(out, devin.NewProvider(devin.NewClient(cfg.Devin), "default"))
+	}
+	return out
+}
+
+func logProviderSummary(logger *log.Logger, cfg config.Config, providers []provider.Provider) {
+	names := make([]string, 0, len(providers))
+	for _, p := range providers {
+		names = append(names, p.Name())
+	}
+	logger.Printf("starting port=%d poll_interval=%s request_timeout=%s providers=%v",
+		cfg.Port, cfg.PollInterval, cfg.RequestTimeout, names)
+	if cfg.OpenCodeEnabled() {
+		logger.Printf("opencode configured with %d subscription(s)", len(cfg.OpenCodeKeys))
+	}
+	if cfg.CursorEnabled() {
+		// Only the auth mode and variable name; the credential never appears.
+		logger.Printf("cursor configured (%s)", cfg.Cursor.AuthModeLabel())
+	}
+	if cfg.DevinEnabled() {
+		org := "resolved from /v3/self"
+		if cfg.Devin.OrgID != "" {
+			org = "DEVIN_ORG_ID set"
+		}
+		logger.Printf("devin configured (%s, reset day %d)", org, cfg.Devin.ResetDay)
+	}
+	if len(providers) == 0 {
+		// Defensive: config validation already rejects this.
+		logger.Fatalf("no provider configured")
+	}
+}

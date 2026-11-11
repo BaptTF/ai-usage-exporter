@@ -1,0 +1,21 @@
+# Binaries
+/ai-usage-exporter
+/bin/
+/dist/
+*.test
+*.exe
+
+# Test / coverage
+coverage.out
+coverage.html
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

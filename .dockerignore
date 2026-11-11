@@ -1,0 +1,11 @@
+.git
+.github
+.gitignore
+.env
+.env.*
+coverage.out
+bin/
+dist/
+tmp/
+*.test
+*.md
