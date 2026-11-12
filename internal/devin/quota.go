@@ -23,7 +23,9 @@ import (
 //	   on Pro), planInfo.planName, planStart/planEnd.
 //
 // Percentages are stored as "used" (100 - remaining): 0 = nothing consumed,
-// 100 = ceiling.
+// 100 = ceiling. Protobuf JSON omits zero-valued fields, so a fully consumed
+// window arrives with its reset timestamp but without the percentage: a
+// present reset with no percentage means 100% used, not "unknown".
 
 const (
 	defaultSeatBaseURL = "https://server.codeium.com"
@@ -165,19 +167,31 @@ func parseQuota(raw []byte) (Quota, error) {
 		q.WeeklyResetsAt = &t
 	}
 
-	if !ps.PlanInfo.HideDailyQuota && ps.DailyQuotaRemainingPercent != nil {
-		used := clampPercent(100 - *ps.DailyQuotaRemainingPercent)
-		q.DailyUsedPercent = &used
+	if !ps.PlanInfo.HideDailyQuota {
+		q.DailyUsedPercent = usedPercent(ps.DailyQuotaRemainingPercent, ps.DailyQuotaResetAtUnix)
 	}
-	if ps.WeeklyQuotaRemainingPercent != nil {
-		used := clampPercent(100 - *ps.WeeklyQuotaRemainingPercent)
-		q.WeeklyUsedPercent = &used
-	}
+	q.WeeklyUsedPercent = usedPercent(ps.WeeklyQuotaRemainingPercent, ps.WeeklyQuotaResetAtUnix)
 
 	if usd, ok := microsUSD(ps.OverageBalanceMicros); ok {
 		q.OnDemandBalanceUSD = &usd
 	}
 	return q, nil
+}
+
+// usedPercent converts a remaining percentage into a consumed percentage.
+// A nil remaining value with a valid reset means the window is exhausted:
+// protobuf JSON omits zero. Without a reset there is no evidence of the
+// window and no value is invented.
+func usedPercent(remaining *float64, reset json.Number) *float64 {
+	if remaining != nil {
+		used := clampPercent(100 - *remaining)
+		return &used
+	}
+	if _, ok := unixNumber(reset); ok {
+		used := 100.0
+		return &used
+	}
+	return nil
 }
 
 // microsUSD converts millionths of a dollar (JSON number or string) to USD.

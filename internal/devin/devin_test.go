@@ -423,6 +423,48 @@ func TestParseQuotaHideDaily(t *testing.T) {
 	}
 }
 
+func TestParseQuotaWeeklyExhaustedProtoOmitted(t *testing.T) {
+	// Devin Max hides the daily quota. An exhausted weekly window arrives with
+	// weeklyQuotaResetAtUnix but no weeklyQuotaRemainingPercent: protobuf JSON
+	// omits the zero. It must surface as 100% used, not as a missing quota.
+	q, err := parseQuota([]byte(`{"userStatus":{"planStatus":{"planInfo":{"planName":"Max","hideDailyQuota":true},"dailyQuotaRemainingPercent":100,"dailyQuotaResetAtUnix":"1794556800","weeklyQuotaResetAtUnix":"1794729600"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.DailyUsedPercent != nil {
+		t.Errorf("daily = %v, want nil when hidden", q.DailyUsedPercent)
+	}
+	if q.WeeklyUsedPercent == nil || *q.WeeklyUsedPercent != 100 {
+		t.Errorf("weekly = %v, want 100", q.WeeklyUsedPercent)
+	}
+	if q.WeeklyResetsAt == nil {
+		t.Error("weekly reset nil")
+	}
+}
+
+func TestParseQuotaDailyExhaustedProtoOmitted(t *testing.T) {
+	q, err := parseQuota([]byte(`{"userStatus":{"planStatus":{"planInfo":{"planName":"Pro"},"dailyQuotaResetAtUnix":"1794556800"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.DailyUsedPercent == nil || *q.DailyUsedPercent != 100 {
+		t.Errorf("daily = %v, want 100", q.DailyUsedPercent)
+	}
+	if q.WeeklyUsedPercent != nil {
+		t.Errorf("weekly = %v, want nil without reset", q.WeeklyUsedPercent)
+	}
+}
+
+func TestParseQuotaMissingPercentWithoutReset(t *testing.T) {
+	q, err := parseQuota([]byte(`{"userStatus":{"planStatus":{"planInfo":{"planName":"Pro"}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.DailyUsedPercent != nil || q.WeeklyUsedPercent != nil {
+		t.Errorf("invented quotas: daily=%v weekly=%v", q.DailyUsedPercent, q.WeeklyUsedPercent)
+	}
+}
+
 func TestParseQuotaOnDemandAndBilling(t *testing.T) {
 	q, err := parseQuota([]byte(`{"userStatus":{"planStatus":{"planInfo":{"planName":"Pro","billingStrategy":"BILLING_STRATEGY_QUOTA"},"dailyQuotaRemainingPercent":50,"overageBalanceMicros":"623376568"}}}`))
 	if err != nil {

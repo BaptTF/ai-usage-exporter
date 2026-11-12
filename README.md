@@ -263,6 +263,11 @@ docker run --rm -p 8080:8080 -e OPENCODE_GO_API_KEY_B="sk-..." ai-usage-exporter
 - **Limite ACU Devin** : l'API publique n'expose pas de plafond ACU absolu.
   `ai_usage_acu_limit` existe dans le contrat mais n'est pas émise sans source
   réelle. Ne pas déduire une limite d'un pourcentage.
+- **Quotas Devin Max** : Max masque le quota quotidien (`hideDailyQuota`) et
+  n'expose donc que `weekly/total`. Quand le quota hebdomadaire est épuisé,
+  `weeklyQuotaRemainingPercent` est omis (zéro en protobuf JSON) mais
+  `weeklyQuotaResetAtUnix` reste présent : l'exportateur publie alors 100 %
+  consommé au lieu d'omettre la série.
 - **Solde on-demand Devin** : `overageBalanceMicros` est parsé par le client
   (`OnDemandBalanceUSD`) mais n'est pas exposé, faute de métrique au contrat.
   À ajouter si le dashboard doit l'afficher.
