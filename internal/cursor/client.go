@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -98,39 +97,24 @@ type GrokUsage struct {
 	ResetsAt     *time.Time `json:"resetsAt,omitempty"`
 }
 
-// Config is what the client needs to authenticate and reach Cursor.
+// Config is what one Cursor client needs to authenticate and reach Cursor.
 type Config struct {
-	// APIKey: CURSOR_API_KEY (canonical, crsr_… prefix). Takes priority.
+	// APIKey: CURSOR_API_KEY_<suffix> (crsr_… prefix). Takes priority.
 	APIKey string
-	// RefreshToken: CURSOR_REFRESH_TOKEN (OAuth). A crsr_ prefix is treated as
-	// an API key as a safety net for a renamed secret.
+	// APIKeyVar names the API-key variable for diagnostics. Empty defaults to
+	// CURSOR_API_KEY for a standalone client.
+	APIKeyVar string
+	// RefreshToken: CURSOR_REFRESH_TOKEN or CURSOR_REFRESH_TOKEN_<suffix>
+	// (OAuth). A crsr_ prefix is treated as an API key as a safety net.
 	RefreshToken string
-	Timeout      time.Duration
-	APIBase      string
-	OAuthURL     string
-	ExchangeURL  string
-	WebBase      string
-}
-
-// ConfigFromEnv reads Cursor configuration. The provider is disabled when
-// neither credential is set.
-func ConfigFromEnv(timeout time.Duration) Config {
-	return Config{
-		APIKey:       APIKeyFromEnv(),
-		RefreshToken: RefreshTokenFromEnv(),
-		Timeout:      timeout,
-	}
-}
-
-// APIKeyFromEnv reads CURSOR_API_KEY, trimming trailing whitespace. Kubernetes
-// and secret stores commonly add a final newline.
-func APIKeyFromEnv() string {
-	return strings.TrimSpace(os.Getenv("CURSOR_API_KEY"))
-}
-
-// RefreshTokenFromEnv reads CURSOR_REFRESH_TOKEN, trimming whitespace.
-func RefreshTokenFromEnv() string {
-	return strings.TrimSpace(os.Getenv("CURSOR_REFRESH_TOKEN"))
+	// RefreshTokenVar names the refresh variable for diagnostics. Empty
+	// defaults to CURSOR_REFRESH_TOKEN.
+	RefreshTokenVar string
+	Timeout         time.Duration
+	APIBase         string
+	OAuthURL        string
+	ExchangeURL     string
+	WebBase         string
 }
 
 // Enabled reports whether a Cursor credential is configured.
@@ -138,19 +122,27 @@ func (c Config) Enabled() bool {
 	return c.APIKey != "" || c.RefreshToken != ""
 }
 
-// resolveAuth chooses the mode. CURSOR_API_KEY wins; a refresh prefixed crsr_
-// is treated as an API key.
+// resolveAuth chooses the mode. An API key wins; a refresh prefixed crsr_ is
+// treated as an API key.
 func (c Config) resolveAuth() (mode authMode, secret, secretVar string) {
+	apiVar := c.APIKeyVar
+	if apiVar == "" {
+		apiVar = "CURSOR_API_KEY"
+	}
+	refreshVar := c.RefreshTokenVar
+	if refreshVar == "" {
+		refreshVar = "CURSOR_REFRESH_TOKEN"
+	}
 	if c.APIKey != "" {
-		return authModeAPIKey, c.APIKey, "CURSOR_API_KEY"
+		return authModeAPIKey, c.APIKey, apiVar
 	}
 	if c.RefreshToken == "" {
 		return authModeNone, "", ""
 	}
 	if strings.HasPrefix(c.RefreshToken, apiKeyPrefix) {
-		return authModeAPIKey, c.RefreshToken, "CURSOR_REFRESH_TOKEN"
+		return authModeAPIKey, c.RefreshToken, refreshVar
 	}
-	return authModeRefresh, c.RefreshToken, "CURSOR_REFRESH_TOKEN"
+	return authModeRefresh, c.RefreshToken, refreshVar
 }
 
 // PresenceSecret returns a non-empty credential for enabling the provider.

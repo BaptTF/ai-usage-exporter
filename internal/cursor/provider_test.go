@@ -10,7 +10,7 @@ import (
 )
 
 func snapshotSubscription() snapshot.Subscription {
-	return snapshot.Subscription{Provider: "cursor", Name: "default"}
+	return snapshot.Subscription{Provider: "cursor", Name: "r_personal"}
 }
 
 func testTime(s string) time.Time {
@@ -149,7 +149,7 @@ func TestAddMoneySkipsUnknownLimits(t *testing.T) {
 func TestProviderCollectAndMonthlyCost(t *testing.T) {
 	s := newCursorServer(t)
 	s.exchangeBody = `{"accessToken":"` + accessJWT(t) + `"}`
-	p := NewProvider(s.clientWithAPIKey(t, "crsr_test"), "default")
+	p := NewProvider(s.clientWithAPIKey(t, "crsr_test"), "r_personal")
 
 	results := p.Collect(context.Background())
 	if len(results) != 1 {
@@ -159,7 +159,7 @@ func TestProviderCollectAndMonthlyCost(t *testing.T) {
 	if res.Err != nil {
 		t.Fatal(res.Err)
 	}
-	if res.Subscription != "default" || res.Data.Provider != "cursor" {
+	if res.Subscription != "r_personal" || res.Data.Provider != "cursor" {
 		t.Errorf("labels = %+v", res)
 	}
 	if res.Partial {
@@ -178,7 +178,7 @@ func TestProviderCollectPartialOnGrokFailure(t *testing.T) {
 	s.exchangeBody = `{"accessToken":"` + accessJWT(t) + `"}`
 	s.sandStatus = 500
 	s.sandWebStatus = 500
-	p := NewProvider(s.clientWithAPIKey(t, "crsr_test"), "default")
+	p := NewProvider(s.clientWithAPIKey(t, "crsr_test"), "r_personal")
 
 	res := p.Collect(context.Background())[0]
 	if res.Err != nil {
@@ -199,7 +199,7 @@ func TestProviderUnknownPriceIsNotInvented(t *testing.T) {
 	s := newCursorServer(t)
 	s.exchangeBody = `{"accessToken":"` + accessJWT(t) + `"}`
 	s.planBody = `{"planInfo":{"planName":"Pro","price":"$240/year"}}`
-	p := NewProvider(s.clientWithAPIKey(t, "crsr_test"), "default")
+	p := NewProvider(s.clientWithAPIKey(t, "crsr_test"), "r_personal")
 
 	res := p.Collect(context.Background())[0]
 	if res.Err != nil {

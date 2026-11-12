@@ -58,6 +58,11 @@ type cursorServer struct {
 	sandBody    string
 	sandWebBody string
 
+	// periodHook runs before a GetCurrentPeriodUsage response is written. It
+	// lets multi-credential tests prove that providers are collected in
+	// parallel.
+	periodHook func()
+
 	periodStatus   int
 	planStatus     int
 	sandStatus     int
@@ -99,6 +104,9 @@ func newCursorServer(t *testing.T) *cursorServer {
 		case strings.HasSuffix(r.URL.Path, "GetCurrentPeriodUsage"):
 			s.periodCalls.Add(1)
 			s.lastAuth = r.Header.Get("Authorization")
+			if s.periodHook != nil {
+				s.periodHook()
+			}
 			w.WriteHeader(s.periodStatus)
 			s.writeJSON(w, s.periodBody)
 		case strings.HasSuffix(r.URL.Path, "GetPlanInfo"):
@@ -584,33 +592,37 @@ func TestJWTSubStripsProviderPrefix(t *testing.T) {
 	}
 }
 
-func TestConfigFromEnvPriorityAndCrsrSafetyNet(t *testing.T) {
-	t.Setenv("CURSOR_API_KEY", "crsr_key")
-	t.Setenv("CURSOR_REFRESH_TOKEN", "refresh")
-	cfg := ConfigFromEnv(time.Second)
+func TestConfigAuthPriorityAndCrsrSafetyNet(t *testing.T) {
+	cfg := Config{
+		APIKey:          "crsr_key",
+		APIKeyVar:       "CURSOR_API_KEY_R_PERSONAL",
+		RefreshToken:    "refresh",
+		RefreshTokenVar: "CURSOR_REFRESH_TOKEN",
+	}
 	mode, secret, varName := cfg.resolveAuth()
-	if mode != authModeAPIKey || secret != "crsr_key" || varName != "CURSOR_API_KEY" {
+	if mode != authModeAPIKey || secret != "crsr_key" || varName != "CURSOR_API_KEY_R_PERSONAL" {
 		t.Errorf("priority = %v %q %q", mode, secret, varName)
 	}
 
-	t.Setenv("CURSOR_API_KEY", "")
-	t.Setenv("CURSOR_REFRESH_TOKEN", "crsr_in_refresh")
-	cfg = ConfigFromEnv(time.Second)
+	cfg = Config{
+		RefreshToken:    "crsr_in_refresh",
+		RefreshTokenVar: "CURSOR_REFRESH_TOKEN",
+	}
 	mode, secret, varName = cfg.resolveAuth()
 	if mode != authModeAPIKey || secret != "crsr_in_refresh" || varName != "CURSOR_REFRESH_TOKEN" {
 		t.Errorf("safety net = %v %q %q", mode, secret, varName)
 	}
 
-	t.Setenv("CURSOR_REFRESH_TOKEN", "plain-refresh")
-	cfg = ConfigFromEnv(time.Second)
+	cfg = Config{
+		RefreshToken:    "plain-refresh",
+		RefreshTokenVar: "CURSOR_REFRESH_TOKEN_B_STUDENT",
+	}
 	mode, _, varName = cfg.resolveAuth()
-	if mode != authModeRefresh || varName != "CURSOR_REFRESH_TOKEN" {
+	if mode != authModeRefresh || varName != "CURSOR_REFRESH_TOKEN_B_STUDENT" {
 		t.Errorf("oauth mode = %v %q", mode, varName)
 	}
 
-	t.Setenv("CURSOR_API_KEY", "")
-	t.Setenv("CURSOR_REFRESH_TOKEN", "")
-	if ConfigFromEnv(time.Second).Enabled() {
-		t.Error("Enabled with empty env")
+	if (Config{}).Enabled() {
+		t.Error("Enabled with empty config")
 	}
 }

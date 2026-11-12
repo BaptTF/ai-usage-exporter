@@ -20,8 +20,9 @@ type Provider struct {
 	now          func() time.Time
 }
 
-// NewProvider creates a Cursor provider. subscription is a bounded label,
-// normally "default".
+// NewProvider creates a Cursor provider for one credential. subscription is a
+// bounded label derived from the credential's variable suffix, for example
+// "b_personal" or "r_personal".
 func NewProvider(client *Client, subscription string) *Provider {
 	return &Provider{client: client, subscription: subscription, now: time.Now}
 }

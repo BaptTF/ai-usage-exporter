@@ -67,8 +67,8 @@ func buildProviders(cfg config.Config) []provider.Provider {
 	if cfg.OpenCodeEnabled() {
 		out = append(out, opencode.NewProvider(opencode.NewClient(cfg.RequestTimeout), cfg.OpenCodeKeys))
 	}
-	if cfg.CursorEnabled() {
-		out = append(out, cursor.NewProvider(cursor.NewClient(cfg.Cursor), "default"))
+	for _, key := range cfg.CursorKeys {
+		out = append(out, cursor.NewProvider(cursor.NewClient(key.ClientConfig(cfg.RequestTimeout)), key.Label))
 	}
 	if cfg.DevinEnabled() {
 		out = append(out, devin.NewProvider(devin.NewClient(cfg.Devin), "default"))
@@ -86,9 +86,10 @@ func logProviderSummary(logger *log.Logger, cfg config.Config, providers []provi
 	if cfg.OpenCodeEnabled() {
 		logger.Printf("opencode configured with %d subscription(s)", len(cfg.OpenCodeKeys))
 	}
-	if cfg.CursorEnabled() {
-		// Only the auth mode and variable name; the credential never appears.
-		logger.Printf("cursor configured (%s)", cfg.Cursor.AuthModeLabel())
+	for _, key := range cfg.CursorKeys {
+		// Only the subscription, auth mode and variable name; the credential
+		// never appears.
+		logger.Printf("cursor configured subscription=%s (%s)", key.Label, key.AuthModeLabel())
 	}
 	if cfg.DevinEnabled() {
 		org := "resolved from /v3/self"

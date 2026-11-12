@@ -18,9 +18,13 @@ Image : `ghcr.io/bapttf/ai-usage-exporter`.
 
 | Provider | Credential | Données |
 |---|---|---|
-| `opencode` | `OPENCODE_GO_API_KEY` + variantes suffixées | quotas monthly / weekly / rolling 5h |
-| `cursor` | `CURSOR_API_KEY` ou `CURSOR_REFRESH_TOKEN` | quota monthly, Grok Bot weekly, dépenses incluses/on-demand, prix du plan |
+| `opencode` | `OPENCODE_GO_API_KEY_<SUFFIXE>` (une par abonnement) | quotas monthly / weekly / rolling 5h |
+| `cursor` | `CURSOR_API_KEY_<SUFFIXE>` ou `CURSOR_REFRESH_TOKEN[_<SUFFIXE>]` | quota monthly, Grok Bot weekly, dépenses incluses/on-demand, prix du plan |
 | `devin` | `DEVIN_API_KEY` | quotas daily / weekly, consommation ACU par produit |
+
+Chaque credential OpenCode et Cursor est un provider indépendant : auth, plan,
+quotas, dépenses, prix et état de collecte séparés. Une clé en échec ne masque
+jamais les autres.
 
 OpenCode est optionnel si Cursor ou Devin est configuré. En revanche, un
 démarrage sans **aucun** provider est refusé. Cursor et Devin sont optionnels et
@@ -29,13 +33,19 @@ totalement indépendants.
 ## Démarrage rapide
 
 ```sh
-OPENCODE_GO_API_KEY="sk-..." \
-CURSOR_API_KEY="crsr_..." \
+OPENCODE_GO_API_KEY_B="sk-..." \
+OPENCODE_GO_API_KEY_R="sk-..." \
+CURSOR_API_KEY_R_PERSONAL="crsr_..." \
+CURSOR_API_KEY_B_PERSONAL="crsr_..." \
+CURSOR_API_KEY_B_STUDENT="crsr_..." \
 DEVIN_API_KEY="cog_..." \
 DEVIN_ORG_ID="org-..." \
 PORT=8080 POLL_INTERVAL=5m REQUEST_TIMEOUT=15s \
 ./ai-usage-exporter
 ```
+
+Les suffixes deviennent les labels : `OPENCODE_GO_API_KEY_B` →
+`subscription="b"`, `CURSOR_API_KEY_B_STUDENT` → `subscription="b_student"`.
 
 ```sh
 curl -fsS localhost:8080/healthz   # {"status":"ok"}
@@ -47,7 +57,7 @@ Avec Docker :
 
 ```sh
 docker run --rm -p 8080:8080 \
-  -e OPENCODE_GO_API_KEY="sk-..." \
+  -e OPENCODE_GO_API_KEY_B="sk-..." \
   ghcr.io/bapttf/ai-usage-exporter:latest
 ```
 
@@ -61,10 +71,10 @@ Toute la configuration passe par l'environnement. Une valeur invalide fait
 | `PORT` | `8080` | Port d'écoute HTTP (entier 1–65535). |
 | `POLL_INTERVAL` | `5m` | Intervalle entre deux collectes. Première collecte immédiate. Durée Go positive (`30s`, `5m`). |
 | `REQUEST_TIMEOUT` | `15s` | Timeout de chaque requête HTTP sortante. Durée Go positive. |
-| `OPENCODE_GO_API_KEY` | — | Première clé OpenCode Go. Label `main`. |
-| `OPENCODE_GO_API_KEY_<SUFFIXE>` | — | Clés supplémentaires. Le suffixe devient le label, en minuscules et limité à `[a-z0-9_-]` (64 caractères max) : `_R` → `r`, `_ALICE` → `alice`. |
-| `CURSOR_API_KEY` | — | Clé API utilisateur Cursor (`crsr_…`), prioritaire. |
-| `CURSOR_REFRESH_TOKEN` | — | Refresh OAuth historique. Une valeur commençant par `crsr_` est traitée comme une clé API. |
+| `OPENCODE_GO_API_KEY_<SUFFIXE>` | — | Une clé OpenCode Go par souscription. Le suffixe devient le label, en minuscules et limité à `[a-z0-9_-]` (64 caractères max) : `_B` → `b`, `_R` → `r`, `_A` → `a`, `_N` → `n`, `_ALICE` → `alice`. La variable nue historique reste acceptée pour compatibilité, mais n'est pas requise. |
+| `CURSOR_API_KEY_<SUFFIXE>` | — | Une clé API utilisateur Cursor (`crsr_…`) par souscription, prioritaire sur le refresh. Le suffixe devient le label : `_R_PERSONAL` → `r_personal`, `_B_PERSONAL` → `b_personal`, `_B_STUDENT` → `b_student`. La variable nue `CURSOR_API_KEY` n'est pas découverte : aucun label `default` n'est produit. |
+| `CURSOR_REFRESH_TOKEN` | — | Refresh OAuth historique, rattaché uniquement à la subscription `r_personal` (l'ancienne credential de base renommée). Une valeur commençant par `crsr_` est traitée comme une clé API. |
+| `CURSOR_REFRESH_TOKEN_<SUFFIXE>` | — | Refresh OAuth pour la subscription correspondante. Le suffixe est normalisé comme pour les clés API. |
 | `DEVIN_API_KEY` | — | Token Devin (`cog_…`), active le provider Devin. |
 | `DEVIN_ORG_ID` | — | Organisation Devin (`org-…`). Utile quand `/v3/self` ne renvoie pas d'`org_id` pour un PAT. |
 | `DEVIN_RESET_DAY` | `5` | Repli local pour le cycle de facturation Devin. Seules les valeurs 1–28 sont retenues ; hors bornes, retour à `5`. Les bornes `planStart`/`planEnd` de l'API priment quand elles courent. |
@@ -85,7 +95,7 @@ n'apparaît qu'après le premier succès.
 main
  ├─ config.Load()                 validation + découverte des clés
  ├─ collector.Run(ctx, interval)  boucle de polling (goroutine)
- │    └─ providers en parallèle (OpenCode clés en parallèle)
+ │    └─ providers en parallèle (un par credential OpenCode et Cursor)
  │         └─ snapshot atomique immuable
  └─ server.Run(ctx)               /metrics /healthz /readyz
       └─ metrics.Collector         rend le snapshot complet à chaque scrape
@@ -168,8 +178,10 @@ informatif. Le rolling 5h OpenCode utilise ces mêmes seuils absolus et n'a ni
 
 ### Mapping par provider
 
-Cursor et Devin exposent une seule souscription par credential, labellisée
-`subscription="default"`. OpenCode expose une souscription par clé.
+OpenCode et Cursor exposent une souscription par credential, labellisée depuis
+le suffixe de la variable (`b`, `r`, `r_personal`, `b_personal`, `b_student`).
+Devin expose une seule souscription par token, labellisée
+`subscription="default"`.
 
 | Provider | `window` / `quota` |
 |---|---|
@@ -208,9 +220,10 @@ ai_usage_quota_dry_days > 3
   `/metrics`, `/healthz`, `/readyz` ou un log de démarrage.
 - Les erreurs de collecte sont expurgées avant log : valeurs connues,
   `Bearer …`, JWT et préfixes `sk-`, `crsr_`, `cog_`.
-- L'access JWT Cursor reste en mémoire process. Le refresh OAuth tourné est
-  conservé en mémoire ; s'il est renouvelé par l'API, mettre à jour le secret
-  stocké pour survivre à un redémarrage.
+- L'access JWT Cursor reste en mémoire process, séparément pour chaque
+  credential. Le refresh OAuth tourné est conservé en mémoire ; s'il est
+  renouvelé par l'API, mettre à jour le secret stocké pour survivre à un
+  redémarrage. `CURSOR_REFRESH_TOKEN` n'est utilisé que pour `r_personal`.
 - Le conteneur tourne en utilisateur non-root (`65532:65532`).
 
 ## Développement
@@ -224,9 +237,10 @@ go build ./cmd/ai-usage-exporter
 
 Le binaire s'appelle `ai-usage-exporter`. Les tests couvrent notamment le
 budget historique, les clients HTTP (succès, 401, 429, réponses invalides,
-soft-fail Grok/Devin), la conservation du dernier snapshot, la parallélisation
-des providers, l'expurgation des secrets, les formats Prometheus et les
-transitions `/readyz`.
+soft-fail Grok/Devin), la découverte et l'isolation des credentials OpenCode et
+Cursor multiples, la conservation du dernier snapshot, la parallélisation des
+providers, l'expurgation des secrets, les formats Prometheus et les transitions
+`/readyz`.
 
 ## Docker / CI
 
@@ -241,7 +255,7 @@ publie `linux/amd64` et `linux/arm64` sur GHCR avec les tags `latest` et
 
 ```sh
 docker build -t ai-usage-exporter .
-docker run --rm -p 8080:8080 -e OPENCODE_GO_API_KEY="sk-..." ai-usage-exporter
+docker run --rm -p 8080:8080 -e OPENCODE_GO_API_KEY_B="sk-..." ai-usage-exporter
 ```
 
 ## Limites et points à réconcilier
@@ -264,6 +278,8 @@ docker run --rm -p 8080:8080 -e OPENCODE_GO_API_KEY="sk-..." ai-usage-exporter
   modifient jamais cette sévérité.
 - **Rolling 5h OpenCode** : pas d'`elapsed_ratio` ni de `dry_days` par
   construction ; seule la sévérité absolue est publiée.
-- **Labels** : les suffixes OpenCode sont normalisés en minuscules. Un
-  `OPENCODE_GO_API_KEY_MAIN` entre en collision avec la clé de base et fait
-  échouer le démarrage (séries dupliquées interdites).
+- **Labels** : les suffixes OpenCode et Cursor sont normalisés en minuscules.
+  Un doublon de label après normalisation (`_B_PERSONAL` et `_b_personal`, ou
+  `OPENCODE_GO_API_KEY_MAIN` avec la clé de base historique) fait échouer le
+  démarrage : les séries Prometheus dupliquées sont interdites. Aucun label
+  Cursor `default` n'est émis ; la variable nue `CURSOR_API_KEY` est ignorée.

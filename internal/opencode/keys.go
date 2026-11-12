@@ -21,9 +21,12 @@ type KeyConfig struct {
 //
 // Examples:
 //
-//	OPENCODE_GO_API_KEY=sk-...       -> label "main"
+//	OPENCODE_GO_API_KEY_B=sk-...     -> label "b"
 //	OPENCODE_GO_API_KEY_R=sk-...     -> label "r"
 //	OPENCODE_GO_API_KEY_ALICE=sk-... -> label "alice"
+//
+// The bare OPENCODE_GO_API_KEY remains accepted for legacy deployments and
+// maps to "main"; it is no longer required.
 func LoadKeysFromEnv() []KeyConfig {
 	return LoadKeys(os.Environ())
 }

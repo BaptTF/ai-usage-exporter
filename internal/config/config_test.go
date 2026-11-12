@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BaptTF/ai-usage-exporter/internal/cursor"
 )
 
 func envMap(values map[string]string) func(string) string {
@@ -23,7 +25,7 @@ func load(values map[string]string) (Config, error) {
 }
 
 func TestDefaultsWithOneOpenCodeKey(t *testing.T) {
-	cfg, err := load(map[string]string{"OPENCODE_GO_API_KEY": "sk-test"})
+	cfg, err := load(map[string]string{"OPENCODE_GO_API_KEY_B": "sk-test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,20 +38,49 @@ func TestDefaultsWithOneOpenCodeKey(t *testing.T) {
 	if cfg.RequestTimeout != 15*time.Second {
 		t.Errorf("RequestTimeout = %s", cfg.RequestTimeout)
 	}
-	if len(cfg.OpenCodeKeys) != 1 || cfg.OpenCodeKeys[0].Label != "main" {
+	if len(cfg.OpenCodeKeys) != 1 || cfg.OpenCodeKeys[0].Label != "b" {
 		t.Errorf("keys = %+v", cfg.OpenCodeKeys)
+	}
+	for _, k := range cfg.OpenCodeKeys {
+		if k.Label == "main" {
+			t.Errorf("base label main emitted without the base variable: %+v", k)
+		}
 	}
 	if cfg.CursorEnabled() || cfg.DevinEnabled() {
 		t.Error("optional providers enabled unexpectedly")
 	}
 }
 
+func TestOpenCodeSuffixedKeysNeedNoBaseAndEmitNoMain(t *testing.T) {
+	cfg, err := load(map[string]string{
+		"OPENCODE_GO_API_KEY_B": "b-secret",
+		"OPENCODE_GO_API_KEY_R": "r-secret",
+		"OPENCODE_GO_API_KEY_A": "a-secret",
+		"OPENCODE_GO_API_KEY_N": "n-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"a": true, "b": true, "n": true, "r": true}
+	if len(cfg.OpenCodeKeys) != len(want) {
+		t.Fatalf("keys = %+v", cfg.OpenCodeKeys)
+	}
+	for _, k := range cfg.OpenCodeKeys {
+		if !want[k.Label] {
+			t.Errorf("unexpected OpenCode label %q", k.Label)
+		}
+		if k.Label == "main" {
+			t.Errorf("label main must not be emitted: %+v", k)
+		}
+	}
+}
+
 func TestOverrides(t *testing.T) {
 	cfg, err := load(map[string]string{
-		"OPENCODE_GO_API_KEY": "sk-test",
-		"PORT":                "9090",
-		"POLL_INTERVAL":       "30s",
-		"REQUEST_TIMEOUT":     "2s",
+		"OPENCODE_GO_API_KEY_B": "sk-test",
+		"PORT":                  "9090",
+		"POLL_INTERVAL":         "30s",
+		"REQUEST_TIMEOUT":       "2s",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,15 +91,99 @@ func TestOverrides(t *testing.T) {
 }
 
 func TestOpenCodeZeroKeysWithCursorIsAllowed(t *testing.T) {
-	cfg, err := load(map[string]string{"CURSOR_API_KEY": "crsr_test"})
+	cfg, err := load(map[string]string{"CURSOR_API_KEY_R_PERSONAL": "crsr_test"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.OpenCodeEnabled() || !cfg.CursorEnabled() {
 		t.Errorf("cfg = %+v", cfg)
 	}
-	if got := cfg.Cursor.AuthModeLabel(); !strings.Contains(got, "CURSOR_API_KEY") {
+	if len(cfg.CursorKeys) != 1 || cfg.CursorKeys[0].Label != "r_personal" {
+		t.Fatalf("CursorKeys = %+v", cfg.CursorKeys)
+	}
+	if got := cfg.CursorKeys[0].AuthModeLabel(); !strings.Contains(got, "CURSOR_API_KEY_R_PERSONAL") {
 		t.Errorf("AuthModeLabel = %q", got)
+	}
+}
+
+func TestCursorSuffixedCredentialsEnableIndependentSubscriptions(t *testing.T) {
+	cfg, err := load(map[string]string{
+		"CURSOR_API_KEY_R_PERSONAL": "crsr_r_secret",
+		"CURSOR_API_KEY_B_PERSONAL": "crsr_b_personal_secret",
+		"CURSOR_API_KEY_B_STUDENT":  "crsr_b_student_secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CursorEnabled() {
+		t.Fatal("CursorEnabled = false")
+	}
+	want := map[string]string{
+		"r_personal": "crsr_r_secret",
+		"b_personal": "crsr_b_personal_secret",
+		"b_student":  "crsr_b_student_secret",
+	}
+	if len(cfg.CursorKeys) != len(want) {
+		t.Fatalf("CursorKeys = %+v", cfg.CursorKeys)
+	}
+	for _, key := range cfg.CursorKeys {
+		wantValue, ok := want[key.Label]
+		if !ok {
+			t.Errorf("unexpected Cursor subscription %q", key.Label)
+			continue
+		}
+		if key.APIKey != wantValue {
+			t.Errorf("subscription %q has the wrong credential", key.Label)
+		}
+		if key.Label == "default" {
+			t.Errorf("default subscription must not be emitted: %+v", key)
+		}
+	}
+}
+
+func TestCursorRefreshTokenOnlyAppliesToRPersonal(t *testing.T) {
+	cfg, err := load(map[string]string{
+		"CURSOR_API_KEY_R_PERSONAL":      "crsr_r_secret",
+		"CURSOR_API_KEY_B_PERSONAL":      "crsr_b_secret",
+		"CURSOR_REFRESH_TOKEN":           "legacy-refresh-secret",
+		"CURSOR_REFRESH_TOKEN_B_STUDENT": "student-refresh-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byLabel := make(map[string]cursor.KeyConfig, len(cfg.CursorKeys))
+	for _, key := range cfg.CursorKeys {
+		byLabel[key.Label] = key
+	}
+	if got := byLabel["r_personal"].RefreshToken; got != "legacy-refresh-secret" {
+		t.Errorf("r_personal refresh token = %q", got)
+	}
+	if got := byLabel["b_personal"].RefreshToken; got != "" {
+		t.Errorf("b_personal must not receive the legacy refresh token: %q", got)
+	}
+	if got := byLabel["b_student"].RefreshToken; got != "student-refresh-secret" {
+		t.Errorf("b_student refresh token = %q", got)
+	}
+}
+
+func TestCursorLegacyRefreshTokenCreatesRPersonalWithoutBaseAPIKey(t *testing.T) {
+	cfg, err := load(map[string]string{
+		"CURSOR_REFRESH_TOKEN":      "legacy-refresh-secret",
+		"CURSOR_API_KEY_B_PERSONAL": "crsr_b_secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.CursorKeys) != 2 {
+		t.Fatalf("CursorKeys = %+v", cfg.CursorKeys)
+	}
+	for _, key := range cfg.CursorKeys {
+		if key.Label != "b_personal" && key.Label != "r_personal" {
+			t.Errorf("unexpected label %q", key.Label)
+		}
+		if key.Label == "default" {
+			t.Errorf("default subscription emitted: %+v", key)
+		}
 	}
 }
 
@@ -95,7 +210,7 @@ func TestNoProviderIsRejected(t *testing.T) {
 func TestInvalidPort(t *testing.T) {
 	for _, raw := range []string{"abc", "0", "-1", "65536", "80.5"} {
 		t.Run(raw, func(t *testing.T) {
-			_, err := load(map[string]string{"OPENCODE_GO_API_KEY": "sk", "PORT": raw})
+			_, err := load(map[string]string{"OPENCODE_GO_API_KEY_B": "sk", "PORT": raw})
 			if err == nil || !strings.Contains(err.Error(), "PORT") {
 				t.Errorf("error = %v, want PORT error", err)
 			}
@@ -114,7 +229,7 @@ func TestInvalidDurations(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name+"/"+tc.value, func(t *testing.T) {
-			_, err := load(map[string]string{"OPENCODE_GO_API_KEY": "sk", tc.name: tc.value})
+			_, err := load(map[string]string{"OPENCODE_GO_API_KEY_B": "sk", tc.name: tc.value})
 			if err == nil || !strings.Contains(err.Error(), tc.name) {
 				t.Errorf("error = %v, want %s error", err, tc.name)
 			}
@@ -124,8 +239,8 @@ func TestInvalidDurations(t *testing.T) {
 
 func TestDuplicateSubscriptionLabelsRejectedWithoutValues(t *testing.T) {
 	_, err := load(map[string]string{
-		"OPENCODE_GO_API_KEY":      "sk-first-secret",
-		"OPENCODE_GO_API_KEY_MAIN": "sk-second-secret",
+		"OPENCODE_GO_API_KEY_B": "sk-first-secret",
+		"OPENCODE_GO_API_KEY_b": "sk-second-secret",
 	})
 	if err == nil {
 		t.Fatal("expected duplicate label error")
@@ -139,13 +254,43 @@ func TestDuplicateSubscriptionLabelsRejectedWithoutValues(t *testing.T) {
 	}
 }
 
+func TestDuplicateCursorSubscriptionLabelsRejectedWithoutValues(t *testing.T) {
+	_, err := load(map[string]string{
+		"CURSOR_API_KEY_B_PERSONAL": "crsr-first-secret",
+		"CURSOR_API_KEY_b_personal": "crsr-second-secret",
+	})
+	if err == nil {
+		t.Fatal("expected duplicate label error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "duplicate Cursor") || !strings.Contains(msg, "CURSOR_API_KEY_B_PERSONAL") {
+		t.Errorf("error = %q", msg)
+	}
+	if strings.Contains(msg, "crsr-first-secret") || strings.Contains(msg, "crsr-second-secret") {
+		t.Errorf("error leaks key values: %q", msg)
+	}
+}
+
+func TestBareCursorAPIKeyIsIgnored(t *testing.T) {
+	cfg, err := load(map[string]string{
+		"DEVIN_API_KEY":  "cog_test",
+		"CURSOR_API_KEY": "crsr_legacy_base_secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CursorEnabled() {
+		t.Errorf("bare CURSOR_API_KEY enabled Cursor: %+v", cfg.CursorKeys)
+	}
+}
+
 func TestCursorAndDevinEnvironmentParsing(t *testing.T) {
 	cfg, err := load(map[string]string{
-		"DEVIN_API_KEY":    "  cog_test\n",
-		"DEVIN_ORG_ID":     " org-123 ",
-		"DEVIN_RESET_DAY":  "12",
-		"DEVIN_API_SERVER": " https://seat.example ",
-		"CURSOR_API_KEY":   " crsr_test ",
+		"DEVIN_API_KEY":             "  cog_test\n",
+		"DEVIN_ORG_ID":              " org-123 ",
+		"DEVIN_RESET_DAY":           "12",
+		"DEVIN_API_SERVER":          " https://seat.example ",
+		"CURSOR_API_KEY_B_PERSONAL": " crsr_test ",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -156,8 +301,11 @@ func TestCursorAndDevinEnvironmentParsing(t *testing.T) {
 	if cfg.Devin.SeatURL != "https://seat.example" {
 		t.Errorf("SeatURL = %q", cfg.Devin.SeatURL)
 	}
-	if cfg.Cursor.APIKey != "crsr_test" {
-		t.Errorf("Cursor APIKey = %q", cfg.Cursor.APIKey)
+	if len(cfg.CursorKeys) != 1 || cfg.CursorKeys[0].Label != "b_personal" {
+		t.Fatalf("CursorKeys = %+v", cfg.CursorKeys)
+	}
+	if cfg.CursorKeys[0].APIKey != "crsr_test" {
+		t.Errorf("Cursor APIKey = %q", cfg.CursorKeys[0].APIKey)
 	}
 }
 
@@ -173,20 +321,28 @@ func TestInvalidDevinResetDayFallsBack(t *testing.T) {
 
 func TestSecretsAreDeduplicatedAndComplete(t *testing.T) {
 	cfg, err := load(map[string]string{
-		"OPENCODE_GO_API_KEY":       "opencode-secret",
-		"OPENCODE_GO_API_KEY_ALICE": "alice-secret",
-		"CURSOR_API_KEY":            "cursor-secret",
-		"DEVIN_API_KEY":             "devin-secret",
+		"OPENCODE_GO_API_KEY_B":        "opencode-secret",
+		"OPENCODE_GO_API_KEY_ALICE":    "alice-secret",
+		"CURSOR_API_KEY_R_PERSONAL":    "cursor-r-secret",
+		"CURSOR_API_KEY_B_PERSONAL":    "cursor-b-personal-secret",
+		"CURSOR_API_KEY_B_STUDENT":     "cursor-b-student-secret",
+		"CURSOR_REFRESH_TOKEN":         "cursor-refresh-secret",
+		"CURSOR_REFRESH_TOKEN_STUDENT": "cursor-student-refresh-secret",
+		"DEVIN_API_KEY":                "devin-secret",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	secrets := cfg.Secrets()
 	want := map[string]bool{
-		"opencode-secret": true,
-		"alice-secret":    true,
-		"cursor-secret":   true,
-		"devin-secret":    true,
+		"opencode-secret":               true,
+		"alice-secret":                  true,
+		"cursor-r-secret":               true,
+		"cursor-b-personal-secret":      true,
+		"cursor-b-student-secret":       true,
+		"cursor-refresh-secret":         true,
+		"cursor-student-refresh-secret": true,
+		"devin-secret":                  true,
 	}
 	if len(secrets) != len(want) {
 		t.Fatalf("secrets = %v", secrets)
@@ -200,8 +356,8 @@ func TestSecretsAreDeduplicatedAndComplete(t *testing.T) {
 
 func TestSecretsIgnoreEmptyValues(t *testing.T) {
 	cfg, err := load(map[string]string{
-		"OPENCODE_GO_API_KEY": "sk",
-		"DEVIN_API_KEY":       "   ",
+		"OPENCODE_GO_API_KEY_B": "sk",
+		"DEVIN_API_KEY":         "   ",
 	})
 	if err != nil {
 		t.Fatal(err)

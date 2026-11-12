@@ -13,23 +13,24 @@ import (
 	"time"
 )
 
-// Cursor auth — two modes, adapted to secret managers:
+// Cursor auth — two modes per credential, adapted to secret managers:
 //
-// 1) User API key (canonical): CURSOR_API_KEY (crsr_…).
+// 1) User API key (canonical): CURSOR_API_KEY_<suffix> (crsr_…).
 //    POST https://api2.cursor.sh/auth/exchange_user_api_key
 //    Authorization: Bearer <crsr_…>, body {}
 //    -> {accessToken, refreshToken}. The access JWT (~1h) is used as Bearer
 //    for DashboardService. The returned refreshToken is NOT renewable via
 //    /oauth/token: the key is exchanged again on expiry or 401.
 //
-// 2) OAuth refresh (historical): CURSOR_REFRESH_TOKEN.
+// 2) OAuth refresh (legacy): CURSOR_REFRESH_TOKEN for "r_personal", or
+//    CURSOR_REFRESH_TOKEN_<suffix> for the matching credential.
 //    POST https://api2.cursor.sh/oauth/token
 //    {"grant_type":"refresh_token","client_id":"…","refresh_token":"…"}
 //
-// Safety net: a CURSOR_REFRESH_TOKEN starting with "crsr_" is treated as an
-// API key, for a deployment that overwrote the refresh secret.
+// Safety net: a refresh token starting with "crsr_" is treated as an API key,
+// for a deployment that overwrote the refresh secret.
 //
-// Priority: CURSOR_API_KEY > CURSOR_REFRESH_TOKEN.
+// Priority: API key > refresh token within the same credential.
 // The access JWT lives in process memory only and is never logged.
 
 const (
@@ -133,7 +134,7 @@ func (a *authenticator) accessToken(ctx context.Context) (string, error) {
 
 	switch a.mode {
 	case authModeNone:
-		return "", &AuthError{Msg: "no Cursor credential (CURSOR_API_KEY or CURSOR_REFRESH_TOKEN)"}
+		return "", &AuthError{Msg: "no Cursor credential (CURSOR_API_KEY_<suffix> or CURSOR_REFRESH_TOKEN[_<suffix>])"}
 	case authModeAPIKey:
 		if a.apiKey == "" {
 			return "", &AuthError{Msg: a.secretVar + " missing"}
@@ -165,7 +166,7 @@ func (a *authenticator) renewLocked(ctx context.Context) (string, error) {
 	case authModeRefresh:
 		return a.refreshLocked(ctx)
 	default:
-		return "", &AuthError{Msg: "no Cursor credential (CURSOR_API_KEY or CURSOR_REFRESH_TOKEN)"}
+		return "", &AuthError{Msg: "no Cursor credential (CURSOR_API_KEY_<suffix> or CURSOR_REFRESH_TOKEN[_<suffix>])"}
 	}
 }
 

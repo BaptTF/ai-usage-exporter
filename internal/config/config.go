@@ -28,7 +28,7 @@ type Config struct {
 	RequestTimeout time.Duration
 
 	OpenCodeKeys []opencode.KeyConfig
-	Cursor       cursor.Config
+	CursorKeys   []cursor.KeyConfig
 	Devin        devin.Config
 }
 
@@ -38,7 +38,7 @@ func Load() (Config, error) {
 }
 
 // LoadFrom is the testable loader. getenv supplies scalar variables, environ
-// supplies the full list used for dynamic OpenCode key discovery.
+// supplies the full list used for dynamic OpenCode and Cursor discovery.
 func LoadFrom(getenv func(string) string, environ []string) (Config, error) {
 	port, err := parsePort(getenv("PORT"))
 	if err != nil {
@@ -58,16 +58,17 @@ func LoadFrom(getenv func(string) string, environ []string) (Config, error) {
 		return Config{}, err
 	}
 
+	cursorKeys := cursor.LoadKeys(environ)
+	if err := validateCursorKeys(cursorKeys); err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		Port:           port,
 		PollInterval:   poll,
 		RequestTimeout: timeout,
 		OpenCodeKeys:   keys,
-		Cursor: cursor.Config{
-			APIKey:       strings.TrimSpace(getenv("CURSOR_API_KEY")),
-			RefreshToken: strings.TrimSpace(getenv("CURSOR_REFRESH_TOKEN")),
-			Timeout:      timeout,
-		},
+		CursorKeys:     cursorKeys,
 		Devin: devin.Config{
 			Token:    strings.TrimSpace(getenv("DEVIN_API_KEY")),
 			OrgID:    strings.TrimSpace(getenv("DEVIN_ORG_ID")),
@@ -77,9 +78,9 @@ func LoadFrom(getenv func(string) string, environ []string) (Config, error) {
 		},
 	}
 
-	if len(cfg.OpenCodeKeys) == 0 && !cfg.Cursor.Enabled() && cfg.Devin.Token == "" {
+	if len(cfg.OpenCodeKeys) == 0 && !cfg.CursorEnabled() && cfg.Devin.Token == "" {
 		return Config{}, fmt.Errorf(
-			"no provider configured: set OPENCODE_GO_API_KEY (or a suffixed variant), CURSOR_API_KEY/CURSOR_REFRESH_TOKEN, or DEVIN_API_KEY")
+			"no provider configured: set OPENCODE_GO_API_KEY_<suffix>, CURSOR_API_KEY_<suffix>/CURSOR_REFRESH_TOKEN, or DEVIN_API_KEY")
 	}
 	return cfg, nil
 }
@@ -87,8 +88,8 @@ func LoadFrom(getenv func(string) string, environ []string) (Config, error) {
 // OpenCodeEnabled reports whether at least one OpenCode key is configured.
 func (c Config) OpenCodeEnabled() bool { return len(c.OpenCodeKeys) > 0 }
 
-// CursorEnabled reports whether a Cursor credential is configured.
-func (c Config) CursorEnabled() bool { return c.Cursor.Enabled() }
+// CursorEnabled reports whether at least one Cursor credential is configured.
+func (c Config) CursorEnabled() bool { return len(c.CursorKeys) > 0 }
 
 // DevinEnabled reports whether a Devin token is configured.
 func (c Config) DevinEnabled() bool { return c.Devin.Token != "" }
@@ -109,8 +110,10 @@ func (c Config) Secrets() []string {
 	for _, k := range c.OpenCodeKeys {
 		add(k.Key)
 	}
-	add(c.Cursor.APIKey)
-	add(c.Cursor.RefreshToken)
+	for _, k := range c.CursorKeys {
+		add(k.APIKey)
+		add(k.RefreshToken)
+	}
 	add(c.Devin.Token)
 	return out
 }
@@ -146,6 +149,20 @@ func validateKeys(keys []opencode.KeyConfig) error {
 	for _, k := range keys {
 		if prev, ok := seen[k.Label]; ok {
 			return fmt.Errorf("duplicate OpenCode subscription label %q from %s and %s", k.Label, prev, k.EnvVar)
+		}
+		seen[k.Label] = k.EnvVar
+	}
+	return nil
+}
+
+// validateCursorKeys rejects duplicate metric labels, which would create
+// duplicate Prometheus series. The error names the environment variables, not
+// values.
+func validateCursorKeys(keys []cursor.KeyConfig) error {
+	seen := make(map[string]string, len(keys))
+	for _, k := range keys {
+		if prev, ok := seen[k.Label]; ok {
+			return fmt.Errorf("duplicate Cursor subscription label %q from %s and %s", k.Label, prev, k.EnvVar)
 		}
 		seen[k.Label] = k.EnvVar
 	}
