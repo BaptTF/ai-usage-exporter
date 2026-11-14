@@ -20,7 +20,7 @@ Image : `ghcr.io/bapttf/ai-usage-exporter`.
 |---|---|---|
 | `opencode` | `OPENCODE_GO_API_KEY_<SUFFIXE>` (une par abonnement) | quotas monthly / weekly / rolling 5h |
 | `cursor` | `CURSOR_API_KEY_<SUFFIXE>` ou `CURSOR_REFRESH_TOKEN[_<SUFFIXE>]` | quota monthly, Grok Bot weekly, dépenses incluses/on-demand, prix du plan |
-| `devin` | `DEVIN_API_KEY` | quotas daily / weekly, consommation ACU par produit |
+| `devin` | `DEVIN_API_KEY_<suffixe>` | quotas daily / weekly, consommation ACU par produit |
 
 Chaque credential OpenCode et Cursor est un provider indépendant : auth, plan,
 quotas, dépenses, prix et état de collecte séparés. Une clé en échec ne masque
@@ -38,7 +38,7 @@ OPENCODE_GO_API_KEY_R="sk-..." \
 CURSOR_API_KEY_R_PERSONAL="crsr_..." \
 CURSOR_API_KEY_B_PERSONAL="crsr_..." \
 CURSOR_API_KEY_B_STUDENT="crsr_..." \
-DEVIN_API_KEY="cog_..." \
+DEVIN_API_KEY_R="cog_..." \
 DEVIN_ORG_ID="org-..." \
 PORT=8080 POLL_INTERVAL=5m REQUEST_TIMEOUT=15s \
 ./ai-usage-exporter
@@ -75,8 +75,9 @@ Toute la configuration passe par l'environnement. Une valeur invalide fait
 | `CURSOR_API_KEY_<SUFFIXE>` | — | Une clé API utilisateur Cursor (`crsr_…`) par souscription, prioritaire sur le refresh. Le suffixe devient le label : `_R_PERSONAL` → `r_personal`, `_B_PERSONAL` → `b_personal`, `_B_STUDENT` → `b_student`. La variable nue `CURSOR_API_KEY` n'est pas découverte : aucun label `default` n'est produit. |
 | `CURSOR_REFRESH_TOKEN` | — | Refresh OAuth historique, rattaché uniquement à la subscription `r_personal` (l'ancienne credential de base renommée). Une valeur commençant par `crsr_` est traitée comme une clé API. |
 | `CURSOR_REFRESH_TOKEN_<SUFFIXE>` | — | Refresh OAuth pour la subscription correspondante. Le suffixe est normalisé comme pour les clés API. |
-| `DEVIN_API_KEY` | — | Token Devin (`cog_…`), active le provider Devin. |
-| `DEVIN_ORG_ID` | — | Organisation Devin (`org-…`). Utile quand `/v3/self` ne renvoie pas d'`org_id` pour un PAT. |
+| `DEVIN_API_KEY_<suffixe>` | — | Un token Devin (`cog_…`) par souscription. Le suffixe devient le label : `_B` → `b`, `_R` → `r`. La variable nue `DEVIN_API_KEY` reste acceptée comme alias de transition de `r` tant que `DEVIN_API_KEY_R` n'existe pas. |
+| `DEVIN_ORG_ID` | — | Organisation Devin partagée (`org-…`). Utilisée quand `/v3/self` ne renvoie pas d'`org_id` pour un PAT. |
+| `DEVIN_ORG_ID_<suffixe>` | — | Organisation spécifique à une souscription ; prioritaire sur `DEVIN_ORG_ID`. |
 | `DEVIN_RESET_DAY` | `5` | Repli local pour le cycle de facturation Devin. Seules les valeurs 1–28 sont retenues ; hors bornes, retour à `5`. Les bornes `planStart`/`planEnd` de l'API priment quand elles courent. |
 | `DEVIN_API_SERVER` | `https://server.codeium.com` | Hôte Connect-RPC des quotas daily/weekly Devin. |
 
@@ -178,10 +179,10 @@ informatif. Le rolling 5h OpenCode utilise ces mêmes seuils absolus et n'a ni
 
 ### Mapping par provider
 
-OpenCode et Cursor exposent une souscription par credential, labellisée depuis
-le suffixe de la variable (`b`, `r`, `r_personal`, `b_personal`, `b_student`).
-Devin expose une seule souscription par token, labellisée
-`subscription="default"`.
+OpenCode, Cursor et Devin exposent une souscription par credential, labellisée
+depuis le suffixe de la variable (`b`, `r`, `r_personal`, `b_personal`,
+`b_student`). Devin n'émet plus de souscription `default` : `DEVIN_API_KEY_B`
+et `DEVIN_API_KEY_R` donnent `subscription="b"` et `"r"`.
 
 | Provider | `window` / `quota` |
 |---|---|
@@ -283,8 +284,10 @@ docker run --rm -p 8080:8080 -e OPENCODE_GO_API_KEY_B="sk-..." ai-usage-exporter
   modifient jamais cette sévérité.
 - **Rolling 5h OpenCode** : pas d'`elapsed_ratio` ni de `dry_days` par
   construction ; seule la sévérité absolue est publiée.
-- **Labels** : les suffixes OpenCode et Cursor sont normalisés en minuscules.
-  Un doublon de label après normalisation (`_B_PERSONAL` et `_b_personal`, ou
-  `OPENCODE_GO_API_KEY_MAIN` avec la clé de base historique) fait échouer le
-  démarrage : les séries Prometheus dupliquées sont interdites. Aucun label
-  Cursor `default` n'est émis ; la variable nue `CURSOR_API_KEY` est ignorée.
+- **Labels** : les suffixes OpenCode, Cursor et Devin sont normalisés en
+  minuscules. Un doublon de label après normalisation (`_B_PERSONAL` et
+  `_b_personal`, ou `OPENCODE_GO_API_KEY_MAIN` avec la clé de base historique)
+  fait échouer le démarrage : les séries Prometheus dupliquées sont interdites.
+  Aucun label Cursor `default` n'est émis ; la variable nue `CURSOR_API_KEY`
+  est ignorée. Pour Devin, `DEVIN_API_KEY` nue est seulement un alias de
+  transition vers `r`, ignoré dès que `DEVIN_API_KEY_R` existe.

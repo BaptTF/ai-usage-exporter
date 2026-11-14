@@ -27,9 +27,11 @@ type Config struct {
 	PollInterval   time.Duration
 	RequestTimeout time.Duration
 
-	OpenCodeKeys []opencode.KeyConfig
-	CursorKeys   []cursor.KeyConfig
-	Devin        devin.Config
+	OpenCodeKeys  []opencode.KeyConfig
+	CursorKeys    []cursor.KeyConfig
+	DevinKeys     []devin.KeyConfig
+	DevinResetDay int
+	DevinSeatURL  string
 }
 
 // Load reads the process environment.
@@ -63,24 +65,25 @@ func LoadFrom(getenv func(string) string, environ []string) (Config, error) {
 		return Config{}, err
 	}
 
+	devinKeys := devin.LoadKeys(environ)
+	if err := validateDevinKeys(devinKeys); err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		Port:           port,
 		PollInterval:   poll,
 		RequestTimeout: timeout,
 		OpenCodeKeys:   keys,
 		CursorKeys:     cursorKeys,
-		Devin: devin.Config{
-			Token:    strings.TrimSpace(getenv("DEVIN_API_KEY")),
-			OrgID:    strings.TrimSpace(getenv("DEVIN_ORG_ID")),
-			ResetDay: devin.ResetDayFromValue(getenv("DEVIN_RESET_DAY")),
-			Timeout:  timeout,
-			SeatURL:  strings.TrimSpace(getenv("DEVIN_API_SERVER")),
-		},
+		DevinKeys:      devinKeys,
+		DevinResetDay:  devin.ResetDayFromValue(getenv("DEVIN_RESET_DAY")),
+		DevinSeatURL:   strings.TrimSpace(getenv("DEVIN_API_SERVER")),
 	}
 
-	if len(cfg.OpenCodeKeys) == 0 && !cfg.CursorEnabled() && cfg.Devin.Token == "" {
+	if len(cfg.OpenCodeKeys) == 0 && !cfg.CursorEnabled() && !cfg.DevinEnabled() {
 		return Config{}, fmt.Errorf(
-			"no provider configured: set OPENCODE_GO_API_KEY_<suffix>, CURSOR_API_KEY_<suffix>/CURSOR_REFRESH_TOKEN, or DEVIN_API_KEY")
+			"no provider configured: set OPENCODE_GO_API_KEY_<suffix>, CURSOR_API_KEY_<suffix>/CURSOR_REFRESH_TOKEN, or DEVIN_API_KEY_<suffix>")
 	}
 	return cfg, nil
 }
@@ -91,8 +94,8 @@ func (c Config) OpenCodeEnabled() bool { return len(c.OpenCodeKeys) > 0 }
 // CursorEnabled reports whether at least one Cursor credential is configured.
 func (c Config) CursorEnabled() bool { return len(c.CursorKeys) > 0 }
 
-// DevinEnabled reports whether a Devin token is configured.
-func (c Config) DevinEnabled() bool { return c.Devin.Token != "" }
+// DevinEnabled reports whether at least one Devin token is configured.
+func (c Config) DevinEnabled() bool { return len(c.DevinKeys) > 0 }
 
 // Secrets returns every credential value for redaction before logging.
 // Values are deduplicated; empty strings are ignored.
@@ -114,7 +117,9 @@ func (c Config) Secrets() []string {
 		add(k.APIKey)
 		add(k.RefreshToken)
 	}
-	add(c.Devin.Token)
+	for _, k := range c.DevinKeys {
+		add(k.Token)
+	}
 	return out
 }
 
@@ -163,6 +168,17 @@ func validateCursorKeys(keys []cursor.KeyConfig) error {
 	for _, k := range keys {
 		if prev, ok := seen[k.Label]; ok {
 			return fmt.Errorf("duplicate Cursor subscription label %q from %s and %s", k.Label, prev, k.EnvVar)
+		}
+		seen[k.Label] = k.EnvVar
+	}
+	return nil
+}
+
+func validateDevinKeys(keys []devin.KeyConfig) error {
+	seen := make(map[string]string, len(keys))
+	for _, k := range keys {
+		if prev, ok := seen[k.Label]; ok {
+			return fmt.Errorf("duplicate Devin subscription label %q from %s and %s", k.Label, prev, k.EnvVar)
 		}
 		seen[k.Label] = k.EnvVar
 	}

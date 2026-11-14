@@ -73,6 +73,55 @@ func TestBuildProvidersWithCursorCredentialsOnly(t *testing.T) {
 	}
 }
 
+func TestBuildProvidersWithDevinCredentialsOnly(t *testing.T) {
+	cfg := loadConfig(t, map[string]string{
+		"DEVIN_API_KEY_B": "cog_b_secret",
+		"DEVIN_API_KEY_R": "cog_r_secret",
+	})
+
+	providers := buildProviders(cfg)
+	if len(providers) != 2 {
+		t.Fatalf("providers = %d, want 2", len(providers))
+	}
+	seen := make(map[string]bool)
+	for _, p := range providers {
+		if p.Name() != "devin" {
+			t.Errorf("provider name = %q, want devin", p.Name())
+		}
+		subs := p.Subscriptions()
+		if len(subs) != 1 {
+			t.Errorf("provider subs = %v, want one", subs)
+			continue
+		}
+		seen[subs[0]] = true
+		if subs[0] == "default" {
+			t.Error("default Devin subscription emitted")
+		}
+	}
+	for _, label := range []string{"b", "r"} {
+		if !seen[label] {
+			t.Errorf("missing Devin provider for %q: %v", label, seen)
+		}
+	}
+
+	var logBuf bytes.Buffer
+	logProviderSummary(log.New(&logBuf, "", 0), cfg, providers)
+	logs := logBuf.String()
+	for _, label := range []string{"b", "r"} {
+		if !strings.Contains(logs, "subscription="+label) {
+			t.Errorf("startup logs do not name subscription %q: %s", label, logs)
+		}
+	}
+	for _, secret := range []string{"cog_b_secret", "cog_r_secret"} {
+		if strings.Contains(logs, secret) {
+			t.Errorf("startup logs leak a Devin credential: %s", logs)
+		}
+	}
+	if strings.Contains(logs, "subscription=default") {
+		t.Errorf("startup logs mention a default Devin subscription: %s", logs)
+	}
+}
+
 func TestBuildProvidersWithSuffixedOpenCodeKeysEmitsNoMain(t *testing.T) {
 	cfg := loadConfig(t, map[string]string{
 		"OPENCODE_GO_API_KEY_B": "b-secret",

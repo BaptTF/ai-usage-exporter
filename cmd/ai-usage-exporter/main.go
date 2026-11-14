@@ -70,8 +70,11 @@ func buildProviders(cfg config.Config) []provider.Provider {
 	for _, key := range cfg.CursorKeys {
 		out = append(out, cursor.NewProvider(cursor.NewClient(key.ClientConfig(cfg.RequestTimeout)), key.Label))
 	}
-	if cfg.DevinEnabled() {
-		out = append(out, devin.NewProvider(devin.NewClient(cfg.Devin), "default"))
+	for _, key := range cfg.DevinKeys {
+		client := devin.NewClient(
+			key.ClientConfig(cfg.RequestTimeout, cfg.DevinResetDay, cfg.DevinSeatURL),
+		)
+		out = append(out, devin.NewProvider(client, key.Label))
 	}
 	return out
 }
@@ -91,12 +94,12 @@ func logProviderSummary(logger *log.Logger, cfg config.Config, providers []provi
 		// never appears.
 		logger.Printf("cursor configured subscription=%s (%s)", key.Label, key.AuthModeLabel())
 	}
-	if cfg.DevinEnabled() {
+	for _, key := range cfg.DevinKeys {
 		org := "resolved from /v3/self"
-		if cfg.Devin.OrgID != "" {
-			org = "DEVIN_ORG_ID set"
+		if key.OrgID != "" {
+			org = "org configured"
 		}
-		logger.Printf("devin configured (%s, reset day %d)", org, cfg.Devin.ResetDay)
+		logger.Printf("devin configured subscription=%s (%s, reset day %d)", key.Label, org, cfg.DevinResetDay)
 	}
 	if len(providers) == 0 {
 		// Defensive: config validation already rejects this.

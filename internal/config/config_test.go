@@ -195,6 +195,30 @@ func TestOpenCodeZeroKeysWithDevinIsAllowed(t *testing.T) {
 	if cfg.OpenCodeEnabled() || !cfg.DevinEnabled() {
 		t.Errorf("cfg = %+v", cfg)
 	}
+	if len(cfg.DevinKeys) != 1 || cfg.DevinKeys[0].Label != "r" {
+		t.Errorf("DevinKeys = %+v", cfg.DevinKeys)
+	}
+}
+
+func TestDevinSuffixedCredentialsBecomeIndependentSubscriptions(t *testing.T) {
+	cfg, err := load(map[string]string{
+		"DEVIN_API_KEY_B": "cog_b",
+		"DEVIN_API_KEY_R": "cog_r",
+		// The legacy bare key must not add a third "r" or a "default".
+		"DEVIN_API_KEY": "cog_legacy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.DevinKeys) != 2 {
+		t.Fatalf("DevinKeys = %+v", cfg.DevinKeys)
+	}
+	if cfg.DevinKeys[0].Label != "b" || cfg.DevinKeys[0].Token != "cog_b" {
+		t.Errorf("first Devin key = %+v", cfg.DevinKeys[0])
+	}
+	if cfg.DevinKeys[1].Label != "r" || cfg.DevinKeys[1].Token != "cog_r" {
+		t.Errorf("second Devin key = %+v", cfg.DevinKeys[1])
+	}
 }
 
 func TestNoProviderIsRejected(t *testing.T) {
@@ -286,8 +310,10 @@ func TestBareCursorAPIKeyIsIgnored(t *testing.T) {
 
 func TestCursorAndDevinEnvironmentParsing(t *testing.T) {
 	cfg, err := load(map[string]string{
-		"DEVIN_API_KEY":             "  cog_test\n",
+		"DEVIN_API_KEY_R":           "  cog_test\n",
+		"DEVIN_API_KEY_B":           "cog_b",
 		"DEVIN_ORG_ID":              " org-123 ",
+		"DEVIN_ORG_ID_R":            " org-r ",
 		"DEVIN_RESET_DAY":           "12",
 		"DEVIN_API_SERVER":          " https://seat.example ",
 		"CURSOR_API_KEY_B_PERSONAL": " crsr_test ",
@@ -295,11 +321,22 @@ func TestCursorAndDevinEnvironmentParsing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Devin.Token != "cog_test" || cfg.Devin.OrgID != "org-123" || cfg.Devin.ResetDay != 12 {
-		t.Errorf("devin = %+v", cfg.Devin)
+	if len(cfg.DevinKeys) != 2 {
+		t.Fatalf("DevinKeys = %+v", cfg.DevinKeys)
 	}
-	if cfg.Devin.SeatURL != "https://seat.example" {
-		t.Errorf("SeatURL = %q", cfg.Devin.SeatURL)
+	b := cfg.DevinKeys[0]
+	r := cfg.DevinKeys[1]
+	if b.Label != "b" || b.Token != "cog_b" || b.OrgID != "org-123" {
+		t.Errorf("Devin B = %+v", b)
+	}
+	if r.Label != "r" || r.Token != "cog_test" || r.OrgID != "org-r" {
+		t.Errorf("Devin R = %+v", r)
+	}
+	if cfg.DevinResetDay != 12 {
+		t.Errorf("DevinResetDay = %d", cfg.DevinResetDay)
+	}
+	if cfg.DevinSeatURL != "https://seat.example" {
+		t.Errorf("SeatURL = %q", cfg.DevinSeatURL)
 	}
 	if len(cfg.CursorKeys) != 1 || cfg.CursorKeys[0].Label != "b_personal" {
 		t.Fatalf("CursorKeys = %+v", cfg.CursorKeys)
@@ -310,12 +347,12 @@ func TestCursorAndDevinEnvironmentParsing(t *testing.T) {
 }
 
 func TestInvalidDevinResetDayFallsBack(t *testing.T) {
-	cfg, err := load(map[string]string{"DEVIN_API_KEY": "cog", "DEVIN_RESET_DAY": "31"})
+	cfg, err := load(map[string]string{"DEVIN_API_KEY_R": "cog", "DEVIN_RESET_DAY": "31"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Devin.ResetDay != 5 {
-		t.Errorf("ResetDay = %d, want 5", cfg.Devin.ResetDay)
+	if cfg.DevinResetDay != 5 {
+		t.Errorf("ResetDay = %d, want 5", cfg.DevinResetDay)
 	}
 }
 
@@ -328,7 +365,8 @@ func TestSecretsAreDeduplicatedAndComplete(t *testing.T) {
 		"CURSOR_API_KEY_B_STUDENT":     "cursor-b-student-secret",
 		"CURSOR_REFRESH_TOKEN":         "cursor-refresh-secret",
 		"CURSOR_REFRESH_TOKEN_STUDENT": "cursor-student-refresh-secret",
-		"DEVIN_API_KEY":                "devin-secret",
+		"DEVIN_API_KEY_B":              "devin-b-secret",
+		"DEVIN_API_KEY_R":              "devin-r-secret",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -342,7 +380,8 @@ func TestSecretsAreDeduplicatedAndComplete(t *testing.T) {
 		"cursor-b-student-secret":       true,
 		"cursor-refresh-secret":         true,
 		"cursor-student-refresh-secret": true,
-		"devin-secret":                  true,
+		"devin-b-secret":                true,
+		"devin-r-secret":                true,
 	}
 	if len(secrets) != len(want) {
 		t.Fatalf("secrets = %v", secrets)
