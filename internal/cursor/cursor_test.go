@@ -626,3 +626,21 @@ func TestConfigAuthPriorityAndCrsrSafetyNet(t *testing.T) {
 		t.Error("Enabled with empty config")
 	}
 }
+
+func TestParseTimeCursorBillingCycle(t *testing.T) {
+	want := time.Date(2026, 12, 9, 14, 6, 5, 0, time.UTC)
+	for _, raw := range []string{
+		"1796825165000",            // Cursor's current millisecond string
+		"1796825165",               // same instant in seconds
+		"2026-12-09T14:06:05Z",     // ISO fallback
+		"2026-12-09T14:06:05.000Z", // ISO with milliseconds
+	} {
+		got, ok := parseTime(raw)
+		if !ok || !got.Equal(want) {
+			t.Errorf("parseTime(%q) = %s, %v; want %s, true", raw, got, ok, want)
+		}
+	}
+	if _, ok := parseTime("not-a-time"); ok {
+		t.Error("parseTime accepted invalid input")
+	}
+}

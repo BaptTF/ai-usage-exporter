@@ -615,6 +615,17 @@ func parseTime(s string) (time.Time, bool) {
 	if s == "" {
 		return time.Time{}, false
 	}
+	// Cursor currently sends billingCycleStart/End as Unix timestamps encoded
+	// as strings, usually in milliseconds ("1796825165000"). Accept seconds too
+	// so a future payload change does not silently drop the reset date again.
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		switch {
+		case n > 1_000_000_000_000:
+			return time.UnixMilli(n).UTC(), true
+		case n > 1_000_000_000:
+			return time.Unix(n, 0).UTC(), true
+		}
+	}
 	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05.000Z", "2006-01-02"} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t.UTC(), true
