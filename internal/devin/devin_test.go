@@ -266,6 +266,50 @@ func TestFetchStatusMissingOrgNamesVariable(t *testing.T) {
 	}
 }
 
+const enterpriseConsumptionBody = `{"type":"about:blank","title":"Forbidden","status":403,"detail":"The consumption API is only available on Enterprise plans.","instance":"/v3/organizations/org-self/consumption/daily"}`
+
+func TestFetchStatusEnterprisePlanKeepsQuotas(t *testing.T) {
+	s := newDevinServer(t)
+	s.consumptionStatus = http.StatusForbidden
+	s.consumptionBody = enterpriseConsumptionBody
+	c := s.client("cog_test")
+
+	st, err := c.FetchStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.ACUUnavailable {
+		t.Fatal("ACUUnavailable = false, want true")
+	}
+	if st.ACUConsumed != 0 || st.DayCount != 0 || st.OrgID != "" {
+		t.Errorf("ACU published despite the plan refusal: %+v", st)
+	}
+	if st.Quota == nil || st.Quota.DailyUsedPercent == nil || *st.Quota.DailyUsedPercent != 40 {
+		t.Fatalf("Quota = %+v, want the seat quotas", st.Quota)
+	}
+}
+
+func TestFetchStatusEnterprisePlanWithoutQuotasFails(t *testing.T) {
+	s := newDevinServer(t)
+	s.consumptionStatus = http.StatusForbidden
+	s.consumptionBody = enterpriseConsumptionBody
+	s.seatStatus = http.StatusInternalServerError
+	s.seatBody = `boom`
+	c := s.client("cog_test")
+
+	_, err := c.FetchStatus(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "Enterprise") || !strings.Contains(msg, "seat quotas") {
+		t.Errorf("error = %q", msg)
+	}
+	if strings.Contains(msg, "inaccessible") {
+		t.Errorf("plan refusal accused the organisation: %q", msg)
+	}
+}
+
 func TestFetchStatusOrgInaccessibleAccusesOrg(t *testing.T) {
 	s := newDevinServer(t)
 	s.consumptionStatus = http.StatusForbidden
@@ -516,6 +560,30 @@ func TestConfigFromEnv(t *testing.T) {
 	cfg := ConfigFromEnv(time.Second)
 	if cfg.Token != "cog_test" || cfg.OrgID != "org-123" || cfg.ResetDay != 12 {
 		t.Errorf("cfg = %+v", cfg)
+	}
+}
+
+func TestProviderCollectEnterprisePlanOmitsACU(t *testing.T) {
+	s := newDevinServer(t)
+	s.consumptionStatus = http.StatusForbidden
+	s.consumptionBody = enterpriseConsumptionBody
+	p := NewProvider(s.client("cog_test"), "b")
+
+	res := p.Collect(context.Background())[0]
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	if res.Partial {
+		t.Error("Partial = true, want false: the plan refusal is not a degraded collect")
+	}
+	if res.Diagnostic != "" {
+		t.Errorf("Diagnostic = %q, want empty", res.Diagnostic)
+	}
+	if res.Data.ACU != nil {
+		t.Errorf("ACU = %+v, want nil", res.Data.ACU)
+	}
+	if len(res.Data.Quotas) == 0 {
+		t.Fatal("quotas dropped")
 	}
 }
 

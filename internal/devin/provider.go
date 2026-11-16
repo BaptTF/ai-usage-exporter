@@ -46,7 +46,11 @@ func (p *Provider) Collect(ctx context.Context) []provider.Result {
 		Provider: ProviderName,
 		Name:     p.subscription,
 		Quotas:   BuildQuotas(st, p.now()),
-		ACU:      BuildACU(st),
+	}
+	// A plan that cannot call consumption/daily has no ACU figure. Publishing
+	// zero would look like a measured empty cycle.
+	if !st.ACUUnavailable {
+		res.Data.ACU = BuildACU(st)
 	}
 	// A missing seat quota degrades the subscription but must not hide ACU
 	// data already fetched from the REST API. Keep the real diagnostic for the

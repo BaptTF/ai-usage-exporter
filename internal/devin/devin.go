@@ -4,6 +4,7 @@ package devin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,7 +24,7 @@ import (
 //	Connect-RPC https://server.codeium.com
 //	  POST …/SeatManagementService/GetUserStatus    -> daily/weekly quotas (%)
 //
-// Three production lessons this client absorbs:
+// Production lessons this client absorbs:
 //
 //  1. org_id is nullable and optional for both PatUserSelf and ServiceUserSelf:
 //     a perfectly valid PAT may carry no organisation. No public endpoint lists
@@ -33,9 +34,18 @@ import (
 //     the current cycle (see CycleBounds).
 //  3. Daily/weekly percentages are only in GetUserStatus, not the REST API.
 //     The same DEVIN_API_KEY (cog_) works as the Connect-RPC apiKey metadata.
+//  4. consumption/daily is Enterprise-only. Free, Teams and Max receive HTTP
+//     403 with "only available on Enterprise plans". That refusal is not an
+//     outage: GetUserStatus still carries the quotas, and no ACU value is
+//     invented. A 403 for any other reason stays a hard failure.
 //
 // The absolute ACU plan limit is not exposed by the public REST API, so the
 // exporter never publishes one.
+
+// errConsumptionNotEnterprise is the documented plan refusal of
+// GET /v3/organizations/{org}/consumption/daily. It is distinct from an org
+// the token cannot see.
+var errConsumptionNotEnterprise = errors.New("devin consumption API is only available on Enterprise plans")
 
 const apiBaseURL = "https://api.devin.ai"
 
@@ -109,6 +119,10 @@ type Status struct {
 
 	// QuotaError is a soft diagnostic when GetUserStatus fails.
 	QuotaError string `json:"quotaError,omitempty"`
+
+	// ACUUnavailable is set when consumption/daily refuses the plan. Quotas
+	// stay valid and no ACU figure is published, including zero.
+	ACUUnavailable bool `json:"acuUnavailable,omitempty"`
 
 	FetchedAt time.Time `json:"fetchedAt"`
 	Error     string    `json:"error,omitempty"`
@@ -215,6 +229,19 @@ func (c *Client) FetchStatus(ctx context.Context) (Status, error) {
 
 	body, err := c.getJSON(ctx, consumptionURL(orgID, start, cappedEnd(end, now)))
 	if err != nil {
+		// Non-Enterprise plans cannot read ACU consumption. Seat quotas are
+		// the remaining source and must stay fresh; dropping them turns a
+		// plan limitation into a permanent collection failure.
+		if errors.Is(err, errConsumptionNotEnterprise) && quota != nil {
+			return Status{
+				Quota:          quota,
+				ACUUnavailable: true,
+				FetchedAt:      now,
+			}, nil
+		}
+		if errors.Is(err, errConsumptionNotEnterprise) && quotaErr != nil {
+			return Status{}, fmt.Errorf("%w; seat quotas: %v", err, quotaErr)
+		}
 		return Status{}, err
 	}
 	st, err := parseResponse(body, orgID, start, end)
@@ -320,6 +347,9 @@ func (c *Client) getJSON(ctx context.Context, path string) ([]byte, error) {
 		return body, nil
 
 	case code == http.StatusForbidden || code == http.StatusNotFound:
+		if code == http.StatusForbidden && consumptionNotEnterprise(body) {
+			return nil, errConsumptionNotEnterprise
+		}
 		if org := orgFromPath(path); org != "" {
 			return nil, c.orgInaccessibleErr(org, code)
 		}
@@ -334,6 +364,19 @@ func (c *Client) getJSON(ctx context.Context, path string) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("devin HTTP %d: %s", code, truncate(string(body), 200))
 	}
+}
+
+// consumptionNotEnterprise recognises the plan gate on consumption/daily.
+// Other 403 bodies stay org or token errors: a missing ViewOrgConsumption
+// permission must not be reported as a healthy quota-only collect.
+func consumptionNotEnterprise(body []byte) bool {
+	var problem struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(body, &problem); err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(problem.Detail), "only available on enterprise")
 }
 
 // orgInaccessibleErr distinguishes the two possible origins of the org: an
